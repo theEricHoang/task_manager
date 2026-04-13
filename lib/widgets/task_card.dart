@@ -23,9 +23,15 @@ class TaskCard extends StatefulWidget {
 class _TaskCardState extends State<TaskCard> {
   final SubtaskService _subtaskService = SubtaskService();
   final TextEditingController _subtaskController = TextEditingController();
+  final GlobalKey<AnimatedListState> _subtaskListKey =
+      GlobalKey<AnimatedListState>();
+
   bool _isExpanded = false;
   bool _isAddingSubtask = false;
   String? _subtaskErrorText;
+
+  /// Tracks the previous subtask snapshot for diffing.
+  List<Subtask> _currentSubtasks = [];
 
   Future<void> _addSubtask() async {
     final name = _subtaskController.text.trim();
@@ -97,6 +103,51 @@ class _TaskCardState extends State<TaskCard> {
     }
   }
 
+  void _syncSubtaskAnimatedList(List<Subtask> oldList, List<Subtask> newList) {
+    final animatedList = _subtaskListKey.currentState;
+    if (animatedList == null) return;
+
+    final oldIds = oldList.map((s) => s.id).toList();
+    final newIds = newList.map((s) => s.id).toSet();
+
+    // Remove items no longer present (reverse to keep indices stable)
+    for (var i = oldIds.length - 1; i >= 0; i--) {
+      if (!newIds.contains(oldIds[i])) {
+        final removed = oldList[i];
+        animatedList.removeItem(
+          i,
+          (context, animation) => _buildAnimatedSubtaskItem(removed, animation),
+          duration: const Duration(milliseconds: 300),
+        );
+      }
+    }
+
+    // Insert new items
+    final oldIdSet = oldIds.toSet();
+    for (var i = 0; i < newList.length; i++) {
+      if (!oldIdSet.contains(newList[i].id)) {
+        animatedList.insertItem(i, duration: const Duration(milliseconds: 300));
+      }
+    }
+  }
+
+  Widget _buildAnimatedSubtaskItem(
+    Subtask subtask,
+    Animation<double> animation,
+  ) {
+    return SizeTransition(
+      sizeFactor: animation,
+      child: FadeTransition(
+        opacity: animation,
+        child: SubtaskCard(
+          subtask: subtask,
+          onToggle: (_) => _toggleSubtask(subtask),
+          onDelete: () => _confirmDeleteSubtask(subtask),
+        ),
+      ),
+    );
+  }
+
   @override
   void dispose() {
     _subtaskController.dispose();
@@ -131,6 +182,9 @@ class _TaskCardState extends State<TaskCard> {
                   onPressed: () {
                     setState(() {
                       _isExpanded = !_isExpanded;
+                      if (!_isExpanded) {
+                        _currentSubtasks = [];
+                      }
                     });
                   },
                 ),
@@ -205,11 +259,13 @@ class _TaskCardState extends State<TaskCard> {
                           color: Colors.red,
                         ),
                         const SizedBox(width: 8),
-                        Text(
-                          'Error loading subtasks: ${snapshot.error}',
-                          style: const TextStyle(
-                            fontSize: 13,
-                            color: Colors.red,
+                        Flexible(
+                          child: Text(
+                            'Error loading subtasks: ${snapshot.error}',
+                            style: const TextStyle(
+                              fontSize: 13,
+                              color: Colors.red,
+                            ),
                           ),
                         ),
                       ],
@@ -231,6 +287,10 @@ class _TaskCardState extends State<TaskCard> {
 
                 final subtasks = snapshot.data ?? [];
 
+                // Drive AnimatedList diff
+                _syncSubtaskAnimatedList(_currentSubtasks, subtasks);
+                _currentSubtasks = subtasks;
+
                 if (subtasks.isEmpty) {
                   return const Padding(
                     padding: EdgeInsets.only(left: 32.0, bottom: 8.0),
@@ -241,17 +301,17 @@ class _TaskCardState extends State<TaskCard> {
                   );
                 }
 
-                return ListView.builder(
+                return AnimatedList(
+                  key: _subtaskListKey,
                   shrinkWrap: true,
                   physics: const NeverScrollableScrollPhysics(),
-                  itemCount: subtasks.length,
-                  itemBuilder: (context, index) {
-                    final subtask = subtasks[index];
-                    return SubtaskCard(
-                      subtask: subtask,
-                      onToggle: (_) => _toggleSubtask(subtask),
-                      onDelete: () => _confirmDeleteSubtask(subtask),
-                    );
+                  initialItemCount: subtasks.length,
+                  itemBuilder: (context, index, animation) {
+                    if (index >= _currentSubtasks.length) {
+                      return const SizedBox.shrink();
+                    }
+                    final subtask = _currentSubtasks[index];
+                    return _buildAnimatedSubtaskItem(subtask, animation);
                   },
                 );
               },
