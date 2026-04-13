@@ -24,12 +24,77 @@ class _TaskCardState extends State<TaskCard> {
   final SubtaskService _subtaskService = SubtaskService();
   final TextEditingController _subtaskController = TextEditingController();
   bool _isExpanded = false;
+  bool _isAddingSubtask = false;
+  String? _subtaskErrorText;
 
-  void _addSubtask() {
+  Future<void> _addSubtask() async {
     final name = _subtaskController.text.trim();
-    if (name.isEmpty) return;
-    _subtaskService.addSubtask(widget.task.id, name: name);
-    _subtaskController.clear();
+    if (name.isEmpty) {
+      setState(() => _subtaskErrorText = 'Subtask name cannot be empty');
+      return;
+    }
+    setState(() {
+      _subtaskErrorText = null;
+      _isAddingSubtask = true;
+    });
+    try {
+      await _subtaskService.addSubtask(widget.task.id, name: name);
+      _subtaskController.clear();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to add subtask: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _isAddingSubtask = false);
+    }
+  }
+
+  Future<void> _toggleSubtask(Subtask subtask) async {
+    try {
+      await _subtaskService.toggleComplete(
+        widget.task.id,
+        subtask.id,
+        subtask.completionStatus,
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to update subtask: $e')));
+      }
+    }
+  }
+
+  Future<void> _confirmDeleteSubtask(Subtask subtask) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Subtask'),
+        content: Text('Delete "${subtask.name}"?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await _subtaskService.deleteSubtask(widget.task.id, subtask.id);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to delete subtask: $e')));
+      }
+    }
   }
 
   @override
@@ -84,28 +149,45 @@ class _TaskCardState extends State<TaskCard> {
                 bottom: 8.0,
               ),
               child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(
                     child: TextField(
                       controller: _subtaskController,
-                      decoration: const InputDecoration(
+                      decoration: InputDecoration(
                         hintText: 'Enter subtask name',
-                        border: OutlineInputBorder(),
+                        border: const OutlineInputBorder(),
                         isDense: true,
-                        contentPadding: EdgeInsets.symmetric(
+                        contentPadding: const EdgeInsets.symmetric(
                           horizontal: 12,
                           vertical: 8,
                         ),
+                        errorText: _subtaskErrorText,
                       ),
                       style: const TextStyle(fontSize: 14),
+                      enabled: !_isAddingSubtask,
+                      onChanged: (_) {
+                        if (_subtaskErrorText != null) {
+                          setState(() => _subtaskErrorText = null);
+                        }
+                      },
                       onSubmitted: (_) => _addSubtask(),
                     ),
                   ),
                   const SizedBox(width: 8),
-                  ElevatedButton(
-                    onPressed: _addSubtask,
-                    child: const Text('Add'),
-                  ),
+                  _isAddingSubtask
+                      ? const Padding(
+                          padding: EdgeInsets.all(8.0),
+                          child: SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        )
+                      : ElevatedButton(
+                          onPressed: _addSubtask,
+                          child: const Text('Add'),
+                        ),
                 ],
               ),
             ),
@@ -115,13 +197,35 @@ class _TaskCardState extends State<TaskCard> {
                 if (snapshot.hasError) {
                   return Padding(
                     padding: const EdgeInsets.only(left: 32.0, bottom: 8.0),
-                    child: Text('Error: ${snapshot.error}'),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.error_outline,
+                          size: 16,
+                          color: Colors.red,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Error loading subtasks: ${snapshot.error}',
+                          style: const TextStyle(
+                            fontSize: 13,
+                            color: Colors.red,
+                          ),
+                        ),
+                      ],
+                    ),
                   );
                 }
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Padding(
                     padding: EdgeInsets.all(8.0),
-                    child: Center(child: CircularProgressIndicator()),
+                    child: Center(
+                      child: SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    ),
                   );
                 }
 
@@ -145,15 +249,8 @@ class _TaskCardState extends State<TaskCard> {
                     final subtask = subtasks[index];
                     return SubtaskCard(
                       subtask: subtask,
-                      onToggle: (_) => _subtaskService.toggleComplete(
-                        widget.task.id,
-                        subtask.id,
-                        subtask.completionStatus,
-                      ),
-                      onDelete: () => _subtaskService.deleteSubtask(
-                        widget.task.id,
-                        subtask.id,
-                      ),
+                      onToggle: (_) => _toggleSubtask(subtask),
+                      onDelete: () => _confirmDeleteSubtask(subtask),
                     );
                   },
                 );

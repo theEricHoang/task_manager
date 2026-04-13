@@ -13,12 +13,73 @@ class TaskListScreen extends StatefulWidget {
 class _TaskListScreenState extends State<TaskListScreen> {
   final TaskService _taskService = TaskService();
   final TextEditingController _nameController = TextEditingController();
+  String? _errorText;
+  bool _isAdding = false;
 
-  void _addTask() {
+  Future<void> _addTask() async {
     final name = _nameController.text.trim();
-    if (name.isEmpty) return;
-    _taskService.addTask(name: name, completionStatus: false);
-    _nameController.clear();
+    if (name.isEmpty) {
+      setState(() => _errorText = 'Task name cannot be empty');
+      return;
+    }
+    setState(() {
+      _errorText = null;
+      _isAdding = true;
+    });
+    try {
+      await _taskService.addTask(name: name, completionStatus: false);
+      _nameController.clear();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to add task: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _isAdding = false);
+    }
+  }
+
+  Future<void> _toggleTask(Task task) async {
+    try {
+      await _taskService.toggleComplete(task.id, task.completionStatus);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to update task: $e')));
+      }
+    }
+  }
+
+  Future<void> _confirmDeleteTask(Task task) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Task'),
+        content: Text('Delete "${task.name}" and all its subtasks?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await _taskService.deleteTask(task.id);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to delete task: $e')));
+      }
+    }
   }
 
   @override
@@ -39,19 +100,39 @@ class _TaskListScreenState extends State<TaskListScreen> {
           Padding(
             padding: const EdgeInsets.all(16.0),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(
                   child: TextField(
                     controller: _nameController,
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       hintText: 'Enter task name',
-                      border: OutlineInputBorder(),
+                      border: const OutlineInputBorder(),
+                      errorText: _errorText,
                     ),
+                    enabled: !_isAdding,
+                    onChanged: (_) {
+                      if (_errorText != null) {
+                        setState(() => _errorText = null);
+                      }
+                    },
                     onSubmitted: (_) => _addTask(),
                   ),
                 ),
                 const SizedBox(width: 8),
-                ElevatedButton(onPressed: _addTask, child: const Text('Add')),
+                _isAdding
+                    ? const Padding(
+                        padding: EdgeInsets.all(12.0),
+                        child: SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    : ElevatedButton(
+                        onPressed: _addTask,
+                        child: const Text('Add'),
+                      ),
               ],
             ),
           ),
@@ -60,7 +141,20 @@ class _TaskListScreenState extends State<TaskListScreen> {
               stream: _taskService.streamTasks(),
               builder: (context, snapshot) {
                 if (snapshot.hasError) {
-                  return Center(child: Text('Error: ${snapshot.error}'));
+                  return Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.error_outline,
+                          size: 48,
+                          color: Colors.red,
+                        ),
+                        const SizedBox(height: 16),
+                        Text('Error: ${snapshot.error}'),
+                      ],
+                    ),
+                  );
                 }
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
@@ -69,7 +163,20 @@ class _TaskListScreenState extends State<TaskListScreen> {
                 final tasks = snapshot.data ?? [];
 
                 if (tasks.isEmpty) {
-                  return const Center(child: Text('No tasks yet. Add one!'));
+                  return Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.task_alt,
+                          size: 48,
+                          color: Theme.of(context).colorScheme.outline,
+                        ),
+                        const SizedBox(height: 16),
+                        const Text('No tasks yet. Add one above!'),
+                      ],
+                    ),
+                  );
                 }
 
                 return ListView.builder(
@@ -79,11 +186,8 @@ class _TaskListScreenState extends State<TaskListScreen> {
                     final task = tasks[index];
                     return TaskCard(
                       task: task,
-                      onToggle: (_) => _taskService.toggleComplete(
-                        task.id,
-                        task.completionStatus,
-                      ),
-                      onDelete: () => _taskService.deleteTask(task.id),
+                      onToggle: (_) => _toggleTask(task),
+                      onDelete: () => _confirmDeleteTask(task),
                     );
                   },
                 );
